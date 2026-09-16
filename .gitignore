@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+private_key.pem
+certificate.pem
+*.key
+*.p12
+*.pfx
+*.tmp
+*_signed.pdf
