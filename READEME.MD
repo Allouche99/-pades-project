@@ -153,7 +153,7 @@ pades-project/
 ├── private_key.pem
 ├── certificate.pem
 ├── document_signed.pdf
-└── README.md
+└── READEME.MD
 ```
 
 > `private_key.pem`, `certificate.pem` and generated signed documents are currently used for local testing only and should not be committed if they contain real credentials or sensitive material.
@@ -184,10 +184,9 @@ pip install pyHanko
 
 ## ▶️ Run the prototype
 
-Make sure the following files are available:
+Make sure the key and certificate files are available:
 
 ```text
-document_test.pdf
 private_key.pem
 certificate.pem
 ```
@@ -195,14 +194,51 @@ certificate.pem
 Then run:
 
 ```bash
-python sign.py
+python sign.py document_test.pdf
 ```
 
 The resulting signed document will be:
 
 ```text
-document_signed.pdf
+document_test_signed.pdf
 ```
+
+The input PDF is passed as an argument and can already contain one or more
+PAdES signatures. Each execution appends a new signature while preserving the
+previous ones:
+
+```bash
+python sign.py document_test_signed.pdf
+```
+
+The output is created in the same directory as the input, with `_signed`
+appended to a new document name. If the input already contains `signed`, the
+same name is kept and `(1)`, `(2)`, etc. are added to avoid duplicate names.
+An explicit output path can still be provided with `--output`.
+
+Custom key and certificate paths can be supplied when needed:
+
+```bash
+python sign.py input.pdf --output output.pdf \
+    --key path/to/private_key.pem \
+    --certificate path/to/certificate.pem
+```
+
+The signature field name is generated automatically. Use `--field-name` only
+when a specific field name is required.
+
+### Output naming
+
+When no output path is provided, the result is written next to the input PDF:
+
+```text
+document.pdf             -> document_signed.pdf
+document_signed.pdf      -> document_signed (1).pdf
+document_signed (1).pdf  -> document_signed (2).pdf
+```
+
+The automatic name avoids overwriting an existing file. To choose a specific
+path, use `--output`.
 
 ---
 
@@ -221,22 +257,18 @@ This confirms that an RFC 3161 timestamp token is embedded in the signature.
 Example verification:
 
 ```python
-from pyhanko.pdf_utils.reader import PdfFileReader
 from asn1crypto import cms
+from pyhanko.pdf_utils.reader import PdfFileReader
 
-pdf = PdfFileReader(open("document_signed.pdf", "rb"))
-signature = pdf.embedded_signatures[0]
-
-content_info = cms.ContentInfo.load(
-    bytes(signature.pkcs7_content)
-)
-
-signer_info = content_info["content"]["signer_infos"][0]
-
-print([
-    (attribute["type"].native, len(attribute["values"]))
-    for attribute in signer_info["unsigned_attrs"]
-])
+with open("document_test_signed.pdf", "rb") as file:
+    pdf = PdfFileReader(file)
+    signature = pdf.embedded_signatures[0]
+    content_info = cms.ContentInfo.load(bytes(signature.pkcs7_content))
+    signer_info = content_info["content"]["signer_infos"][0]
+    print([
+        (attribute["type"].native, len(attribute["values"]))
+        for attribute in signer_info["unsigned_attrs"]
+    ])
 ```
 
 Expected output:
@@ -250,6 +282,22 @@ Expected output:
 ## 🔌 Backend Integration
 
 The current repository is a **working prototype**.
+
+The backend can call the reusable `sign_pdf` function directly. The function
+returns the path of the generated PDF and preserves existing signatures:
+
+```python
+from sign import sign_pdf
+
+signed_path = sign_pdf(
+    input_path="/tmp/document.pdf",
+    key_path="/secrets/private_key.pem",
+    certificate_path="/secrets/certificate.pem",
+)
+```
+
+The private key must remain in a server-side secret manager or protected
+volume. It must never be sent by the client in the PDF request.
 
 The target integration with the backend is:
 
