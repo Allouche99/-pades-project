@@ -1,4 +1,6 @@
 
+
+import subprocess
 import argparse
 import os
 import re
@@ -7,7 +9,7 @@ import tempfile
 from io import BytesIO
 from pathlib import Path
 from typing import BinaryIO
-
+from pathlib import Path
 from asn1crypto import cms
 from pyhanko.pdf_utils.incremental_writer import IncrementalPdfFileWriter
 from pyhanko.pdf_utils.reader import PdfFileReader
@@ -50,7 +52,7 @@ class FallbackTimeStamper(TimeStamper):
     def __init__(self, tsas: tuple[HTTPTimeStamper, ...]):
         super().__init__()
         if not tsas:
-            raise TimestampError("Aucune TSA n'est configurée")
+            raise TimestampError("No TSA is configured")
         self.tsas = tsas
 
     async def async_timestamp(self, message_digest, md_algorithm):
@@ -67,7 +69,7 @@ class FallbackTimeStamper(TimeStamper):
             except Exception as error:
                 last_error = error
 
-        raise TimestampError("Toutes les TSA ont échoué") from last_error
+        raise TimestampError("All TSAs failed") from last_error
 
 
 def build_timestamper() -> FallbackTimeStamper:
@@ -141,11 +143,11 @@ def _sign_pdf_bytes(
 ) -> bytes:
     """Create and validate one PAdES-T signature in memory."""
     if not isinstance(pdf_bytes, bytes) or not pdf_bytes:
-        raise InputFileError("Le backend doit fournir un PDF non vide en bytes")
+        raise InputFileError("The backend must provide non-empty PDF bytes")
     if not key_path.is_file():
-        raise InputFileError(f"Clé privée introuvable : {key_path}")
+        raise InputFileError(f"Private key not found: {key_path}")
     if not certificate_path.is_file():
-        raise InputFileError(f"Certificat introuvable : {certificate_path}")
+        raise InputFileError(f"Certificate not found: {certificate_path}")
 
     del eIDAS_auth, eIDAS_iden, company_name
     try:
@@ -156,13 +158,13 @@ def _sign_pdf_bytes(
             field_name = next_field_name(input_stream)
         elif field_name in existing_field_names:
             raise OutputFileError(
-                f"Le champ de signature existe déjà : {field_name}"
+                f"Signature field already exists: {field_name}"
             )
         input_stream.seek(0)
     except SigningError:
         raise
     except Exception as error:
-        raise InputFileError("PDF invalide ou illisible") from error
+        raise InputFileError("Invalid or unreadable PDF") from error
 
     try:
         signer = SimpleSigner.load(
@@ -172,7 +174,7 @@ def _sign_pdf_bytes(
         )
     except Exception as error:
         raise SigningError(
-            "Clé privée et certificat invalides ou incompatibles"
+            "Invalid or incompatible private key and certificate"
         ) from error
 
     metadata = PdfSignatureMetadata(
@@ -197,7 +199,7 @@ def _sign_pdf_bytes(
             signed_reader = PdfFileReader(signed_stream)
             signatures = signed_reader.embedded_signatures
             if not signatures:
-                raise SigningError("La signature n'a pas été créée")
+                raise SigningError("The signature was not created")
             cms_content = cms.ContentInfo.load(
                 bytes(signatures[-1].pkcs7_content)
             )
@@ -208,13 +210,13 @@ def _sign_pdf_bytes(
             )
             if not has_timestamp:
                 raise TimestampError(
-                    "Le CMS ne contient pas signature_time_stamp_token"
+                    "The CMS does not contain a signature_time_stamp_token"
                 )
         return signed_bytes
     except TimestampError:
         raise
     except Exception as error:
-        raise SigningError("Échec de la signature PAdES-T") from error
+        raise SigningError("PAdES-T signing failed") from error
 
 
 def sign_pdf(
@@ -245,15 +247,15 @@ def _sign_pdf_file(
 ) -> Path:
     """Adapt the file-based CLI to the bytes-based signing API."""
     if not input_path.is_file():
-        raise InputFileError(f"Fichier PDF introuvable : {input_path}")
+        raise InputFileError(f"PDF file not found: {input_path}")
     if input_path.resolve() == output_path.resolve():
         raise OutputFileError(
-            "Le fichier de sortie doit être différent du fichier d'entrée"
+            "The output file must be different from the input file"
         )
     if output_path.parent != Path('.') and not output_path.parent.is_dir():
-        raise OutputFileError(f"Dossier de sortie inexistant : {output_path.parent}")
+        raise OutputFileError(f"Output directory does not exist: {output_path.parent}")
     if output_path.exists():
-        raise OutputFileError(f"Le fichier de sortie existe déjà : {output_path}")
+        raise OutputFileError(f"Output file already exists: {output_path}")
 
     signed_bytes = _sign_pdf_bytes(
         input_path.read_bytes(),
@@ -279,7 +281,7 @@ def _sign_pdf_file(
             os.link(temporary_path, output_path)
         except FileExistsError as error:
             raise OutputFileError(
-                f"Le fichier de sortie existe déjà : {output_path}"
+                f"Output file already exists: {output_path}"
             ) from error
         temporary_path.unlink()
         return output_path
@@ -290,33 +292,75 @@ def _sign_pdf_file(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Ajoute une signature électronique PAdES-T à un PDF."
+        description="Adds a PAdES-T electronic signature to a PDF."
     )
-    parser.add_argument("input", type=Path, help="PDF original ou déjà signé")
+    parser.add_argument("input", type=Path, help="Original or already-signed PDF")
     parser.add_argument(
         "--output",
         type=Path,
-        help="PDF de sortie (par défaut : <entrée>_signed.pdf)",
+        help="Output PDF (default: <input>_signed.pdf)",
     )
     parser.add_argument(
         "--key",
         type=Path,
         default=DEFAULT_KEY_FILE,
-        help="Fichier de clé privée (défaut : private_key.pem)",
+        help="Private key file (default: private_key.pem)",
     )
     parser.add_argument(
         "--certificate",
         type=Path,
         default=DEFAULT_CERTIFICATE_FILE,
-        help="Certificat du signataire (défaut : certificate.pem)",
+        help="Signer's certificate (default: certificate.pem)",
     )
     parser.add_argument(
         "--field-name",
-        help="Nom du champ de signature (généré automatiquement par défaut)",
+        help="Signature field name (auto-generated by default)",
     )
     return parser.parse_args()
 
+import subprocess
+from pathlib import Path
 
+
+def generate_certificate(
+    organization: str,
+    common_name: str = "Demo Signer",
+    days: int = 365,
+) -> None:
+    key_path = Path("private_key.pem")
+    certificate_path = Path("certificate.pem")
+
+    # 1. Générer la clé privée RSA 2048 bits
+    subprocess.run(
+        [
+            "openssl",
+            "genrsa",
+            "-out",
+            str(key_path),
+            "2048",
+        ],
+        check=True,
+    )
+
+    # 2. Générer le certificat auto-signé
+    subprocess.run(
+        [
+            "openssl",
+            "req",
+            "-new",
+            "-x509",
+            "-key",
+            str(key_path),
+            "-out",
+            str(certificate_path),
+            "-days",
+            str(days),
+            "-sha256",
+            "-subj",
+            f"/C=FR/O={organization}/CN={common_name}",
+        ],
+        check=True,
+    )
 def main() -> int:
     args = parse_args()
     try:
@@ -332,12 +376,11 @@ def main() -> int:
             field_name=args.field_name,
         )
     except SigningError as error:
-        print(f"Erreur : {error}", file=sys.stderr)
+        print(f"Error: {error}", file=sys.stderr)
         return 1
-    print(f"PDF signé avec succès : {signed_path}")
+    print(f"PDF successfully signed: {signed_path}")
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
